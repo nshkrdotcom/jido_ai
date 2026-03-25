@@ -24,15 +24,20 @@ defmodule Jido.AI.Strategies.ReAct do
         name: "my_react_agent",
         strategy: {
           Jido.AI.Strategies.ReAct,
-          tools: [MyApp.Actions.Calculator, MyApp.Actions.Search],
+          tools: [MyApp.Actions.Calculator],
           system_prompt: "You are a helpful assistant...",
           model: "anthropic:claude-haiku-4-5",
           max_iterations: 10
         }
 
+  Mounted agent plugins also contribute their declared action modules to the
+  tool surface at strategy init time. This lets plugin-backed integrations,
+  including generated `Jido.Plugin` bundles, become model tools without
+  duplicating those same action modules in `:tools`.
+
   ### Options
 
-  - `:tools` (required) - List of Jido.Action modules to use as tools
+  - `:tools` (optional) - Explicit Jido.Action modules to use as tools
   - `:system_prompt` (optional) - Custom system prompt for the LLM
   - `:model` (optional) - Model identifier, defaults to agent's `:model` state or "anthropic:claude-haiku-4-5"
   - `:max_iterations` (optional) - Maximum reasoning iterations, defaults to 10
@@ -525,16 +530,7 @@ defmodule Jido.AI.Strategies.ReAct do
 
   defp build_config(agent, ctx) do
     opts = ctx[:strategy_opts] || []
-
-    tools_modules =
-      case Keyword.fetch(opts, :tools) do
-        {:ok, mods} when is_list(mods) ->
-          mods
-
-        :error ->
-          raise ArgumentError,
-                "Jido.AI.Strategies.ReAct requires :tools option (list of Jido.Action modules)"
-      end
+    tools_modules = resolve_tool_modules(agent, ctx, opts)
 
     actions_by_name = Map.new(tools_modules, &{&1.name(), &1})
     reqllm_tools = ToolAdapter.from_actions(tools_modules)
@@ -555,6 +551,45 @@ defmodule Jido.AI.Strategies.ReAct do
       base_tool_context: Map.get(agent.state, :tool_context) || Keyword.get(opts, :tool_context, %{})
     }
   end
+
+  defp resolve_tool_modules(%Agent{} = agent, ctx, opts) do
+    {explicit_tools, explicit_tools_declared?} =
+      case Keyword.fetch(opts, :tools) do
+        {:ok, mods} when is_list(mods) -> {mods, true}
+        {:ok, nil} -> {[], true}
+        :error -> {[], false}
+      end
+
+    plugin_tools = plugin_tool_modules(agent, ctx)
+    tool_modules = Enum.uniq(explicit_tools ++ plugin_tools)
+
+    if tool_modules == [] and not explicit_tools_declared? do
+      raise ArgumentError,
+            "Jido.AI.Strategies.ReAct requires at least one tool via :tools or mounted plugin actions"
+    else
+      tool_modules
+    end
+  end
+
+  defp plugin_tool_modules(%Agent{} = agent, ctx) do
+    agent_module =
+      case Map.get(ctx, :agent_module) do
+        module when is_atom(module) -> module
+        _other -> Map.get(agent, :agent_module)
+      end
+
+    plugin_tool_modules(agent_module)
+  end
+
+  defp plugin_tool_modules(agent_module) when is_atom(agent_module) do
+    if function_exported?(agent_module, :actions, 0) do
+      agent_module.actions()
+    else
+      []
+    end
+  end
+
+  defp plugin_tool_modules(_other), do: []
 
   # Resolves model aliases to full specs, passes through strings unchanged
   defp resolve_model_spec(model) when is_atom(model) do

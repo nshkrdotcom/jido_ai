@@ -11,19 +11,25 @@ defmodule Jido.AI.ReActAgent do
         use Jido.AI.ReActAgent,
           name: "weather_agent",
           description: "Weather Q&A agent",
-          tools: [MyApp.Actions.Weather, MyApp.Actions.Forecast],
+          plugins: [{MyApp.Integrations.Weather.Generated.Plugin, %{}}],
           system_prompt: "You are a weather expert..."
       end
+
+  Mounted plugins automatically contribute their declared `Jido.Action`
+  modules to the ReAct tool surface. The optional `:tools` list remains
+  available for explicit non-plugin actions or for mixing plugin-backed and
+  standalone tools in one agent.
 
   ## Options
 
   - `:name` (required) - Agent name
-  - `:tools` (required) - List of `Jido.Action` modules to use as tools
+  - `:tools` (optional) - Additional `Jido.Action` modules to expose as tools
   - `:description` - Agent description (default: "ReAct agent \#{name}")
   - `:system_prompt` - Custom system prompt for the LLM
   - `:model` - Model identifier (default: "anthropic:claude-haiku-4-5")
   - `:max_iterations` - Maximum reasoning iterations (default: 10)
   - `:tool_context` - Context map passed to all tool executions (e.g., `%{actor: user, domain: MyDomain}`)
+  - `:plugins` - Mounted plugins whose action surfaces are also exposed as tools
   - `:skills` - Additional skills to attach to the agent (TaskSupervisorSkill is auto-included)
 
   ## Generated Functions
@@ -155,12 +161,12 @@ defmodule Jido.AI.ReActAgent do
   defmacro __using__(opts) do
     # Extract all values at compile time (in the calling module's context)
     name = Keyword.fetch!(opts, :name)
-    tools_ast = Keyword.fetch!(opts, :tools)
+    tools_ast = Keyword.get(opts, :tools, [])
 
     # Expand module aliases in the tools list to actual module atoms
     # This handles {:__aliases__, _, [...]} tuples from macro expansion
     tools =
-      Enum.map(tools_ast, fn
+      Enum.map(List.wrap(tools_ast), fn
         {:__aliases__, _, _} = alias_ast -> Macro.expand(alias_ast, __CALLER__)
         mod when is_atom(mod) -> mod
       end)

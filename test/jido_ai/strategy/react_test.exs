@@ -22,6 +22,10 @@ defmodule Jido.AI.Strategies.ReActTest do
     def run(%{query: query}, _ctx), do: {:ok, %{results: ["Found: #{query}"]}}
   end
 
+  defmodule PluginOnlyAgent do
+    def actions, do: [TestSearch]
+  end
+
   # Helper to create a mock agent
   defp create_agent(opts) do
     %Jido.Agent{
@@ -74,6 +78,17 @@ defmodule Jido.AI.Strategies.ReActTest do
 
       # Default is "anthropic:claude-haiku-4-5"
       assert config.model == "anthropic:claude-haiku-4-5"
+    end
+
+    test "derives tools from mounted agent plugins when explicit tools are omitted" do
+      base_agent = %Jido.Agent{id: "plugin-agent", name: "plugin_agent", state: %{}}
+      {agent, []} = ReAct.init(base_agent, %{agent_module: PluginOnlyAgent})
+
+      state = StratState.get(agent, %{})
+      config = state[:config]
+
+      assert config.tools == [TestSearch]
+      assert ReAct.list_tools(agent) == [TestSearch]
     end
   end
 

@@ -39,6 +39,22 @@ defmodule Jido.AI.ReActAgentTest do
     def run(%{query: query}, _ctx), do: {:ok, %{results: ["Found: #{query}"]}}
   end
 
+  defmodule PluginSearch do
+    use Jido.Action,
+      name: "plugin_search",
+      description: "Search action published through a plugin"
+
+    def run(%{query: query}, _ctx), do: {:ok, %{results: ["Plugin found: #{query}"]}}
+  end
+
+  defmodule SearchPlugin do
+    use Jido.Plugin,
+      name: "search_plugin",
+      state_key: :search_plugin,
+      description: "Provides plugin-backed search actions",
+      actions: [PluginSearch]
+  end
+
   # ============================================================================
   # Test Agents Using ReActAgent Macro
   # ============================================================================
@@ -66,6 +82,19 @@ defmodule Jido.AI.ReActAgentTest do
       name: "agent_with_plain_map",
       tools: [TestCalculator],
       tool_context: %{tenant_id: "tenant_123", enabled: true}
+  end
+
+  defmodule AgentWithPluginTools do
+    use Jido.AI.ReActAgent,
+      name: "agent_with_plugin_tools",
+      plugins: [SearchPlugin]
+  end
+
+  defmodule AgentWithExplicitAndPluginTools do
+    use Jido.AI.ReActAgent,
+      name: "agent_with_explicit_and_plugin_tools",
+      tools: [TestCalculator],
+      plugins: [SearchPlugin]
   end
 
   # ============================================================================
@@ -180,6 +209,22 @@ defmodule Jido.AI.ReActAgentTest do
       assert TestCalculator in tools
       assert TestSearch in tools
       assert Enum.all?(tools, &is_atom/1)
+    end
+
+    test "mounted plugins contribute tool modules without duplicating a separate tools list" do
+      agent = AgentWithPluginTools.new()
+      tools = ReAct.list_tools(agent)
+
+      assert tools == [PluginSearch]
+    end
+
+    test "explicit tools and mounted plugin tools are merged into one ReAct tool surface" do
+      agent = AgentWithExplicitAndPluginTools.new()
+      tools = ReAct.list_tools(agent)
+
+      assert TestCalculator in tools
+      assert PluginSearch in tools
+      assert length(tools) == 2
     end
   end
 

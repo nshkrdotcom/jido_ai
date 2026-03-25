@@ -61,10 +61,10 @@ defmodule Jido.AI.Integration.JidoV2MigrationTest do
 
   describe "Strategy Configuration" do
     test "ReAct strategy initializes with empty config" do
-      # ReAct requires tools option, so this test now expects an error
+      # ReAct still requires at least one tool, whether explicit or plugin-backed.
       agent = %Agent{id: "test-agent", name: "test", state: %{}}
 
-      assert_raise ArgumentError, ~r/requires :tools option/, fn ->
+      assert_raise ArgumentError, ~r/requires at least one tool/, fn ->
         ReAct.init(agent, %{})
       end
     end
