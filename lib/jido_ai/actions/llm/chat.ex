@@ -130,7 +130,7 @@ defmodule Jido.AI.Actions.LLM.Chat do
           base_metadata
           |> Map.merge(%{
             error_type: Helpers.telemetry_error_type(reason),
-            error_reason: inspect(reason),
+            error_reason: Observe.telemetry_safe(reason),
             termination_reason: :error
           })
           |> Observe.sanitize_sensitive()

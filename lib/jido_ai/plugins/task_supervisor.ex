@@ -53,7 +53,7 @@ defmodule Jido.AI.Plugins.TaskSupervisor do
         {:ok, %{supervisor: supervisor_pid}}
 
       {:error, reason} ->
-        Logger.error(fn -> "Failed to start Task.Supervisor" end, reason: inspect(reason))
+        Logger.error(fn -> "Failed to start Task.Supervisor" end, reason: safe_inspect(reason))
         {:error, {:task_supervisor_failed, reason}}
     end
   end
@@ -65,6 +65,22 @@ defmodule Jido.AI.Plugins.TaskSupervisor do
     case Task.Supervisor.start_link() do
       {:ok, pid} -> {:ok, pid}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp safe_inspect(term, opts \\ []) do
+    max_length = Keyword.get(opts, :max_length, 200)
+
+    term
+    |> inspect(limit: Keyword.get(opts, :limit, 10), pretty: false, printable_limit: max_length)
+    |> truncate_inspect(max_length)
+  end
+
+  defp truncate_inspect(text, max_length) when is_binary(text) do
+    if String.length(text) > max_length do
+      String.slice(text, 0, max_length) <> "..."
+    else
+      text
     end
   end
 end

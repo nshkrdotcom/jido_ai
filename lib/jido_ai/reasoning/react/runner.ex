@@ -567,7 +567,7 @@ defmodule Jido.AI.Reasoning.ReAct.Runner do
           {acc, context_acc}
 
         {:error, reason}, {acc, context_acc} ->
-          Logger.error(fn -> "tool task failure" end, reason: inspect(reason))
+          Logger.error(fn -> "tool task failure" end, reason: safe_inspect(reason))
           {acc, context_acc}
       end)
 
@@ -1234,5 +1234,21 @@ defmodule Jido.AI.Reasoning.ReAct.Runner do
     end)
     |> Enum.sort()
     |> Enum.join("|")
+  end
+
+  defp safe_inspect(term, opts \\ []) do
+    max_length = Keyword.get(opts, :max_length, 200)
+
+    term
+    |> inspect(limit: Keyword.get(opts, :limit, 10), pretty: false, printable_limit: max_length)
+    |> truncate_inspect(max_length)
+  end
+
+  defp truncate_inspect(text, max_length) when is_binary(text) do
+    if String.length(text) > max_length do
+      String.slice(text, 0, max_length) <> "..."
+    else
+      text
+    end
   end
 end
