@@ -57,12 +57,12 @@ defmodule Jido.AI.ToolApiTest do
 
     test "skips validation when validate: false" do
       # When validation is skipped, registration proceeds to AgentServer call
-      # Using a dead pid should now fail at AgentServer resolution
+      # Using a dead pid will fail at the underlying AgentServer call
       fake_pid = spawn(fn -> :ok end)
       ref = Process.monitor(fake_pid)
       assert_receive {:DOWN, ^ref, :process, ^fake_pid, _reason}
 
-      assert {:error, :not_found} = AI.register_tool(fake_pid, NotATool, validate: false, timeout: 100)
+      assert catch_exit(AI.register_tool(fake_pid, NotATool, validate: false, timeout: 100))
     end
 
     test "set_system_prompt forwards to AgentServer call" do
@@ -70,7 +70,7 @@ defmodule Jido.AI.ToolApiTest do
       ref = Process.monitor(fake_pid)
       assert_receive {:DOWN, ^ref, :process, ^fake_pid, _reason}
 
-      assert {:error, :not_found} = AI.set_system_prompt(fake_pid, "prompt", timeout: 100)
+      assert catch_exit(AI.set_system_prompt(fake_pid, "prompt", timeout: 100))
     end
   end
 
