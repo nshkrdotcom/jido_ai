@@ -72,6 +72,24 @@ defmodule Jido.AI.ObserveTest do
     assert Enum.at(sanitized.notes, 1).private_key == "[REDACTED]"
   end
 
+  test "telemetry_safe redacts sensitive values and truncates large strings" do
+    payload = %{
+      "api_key" => "secret-key",
+      "message" => String.duplicate("x", 260),
+      nested: [%{"session_token" => "secret-token"}, %{ok: true}],
+      other: {:tuple, :value}
+    }
+
+    sanitized = Observe.telemetry_safe(payload)
+
+    assert sanitized["api_key"] == "[REDACTED]"
+    assert String.length(sanitized["message"]) < 260
+    assert String.ends_with?(sanitized["message"], "...")
+    assert Enum.at(sanitized[:nested], 0)["session_token"] == "[REDACTED]"
+    assert Enum.at(sanitized[:nested], 1).ok == true
+    assert is_binary(sanitized[:other])
+  end
+
   test "emit executes telemetry with normalized shape" do
     ref = make_ref()
     handler_id = "observe-test-emit-#{inspect(ref)}"

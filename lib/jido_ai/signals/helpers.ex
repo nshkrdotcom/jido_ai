@@ -61,20 +61,16 @@ defmodule Jido.AI.Signal.Helpers do
     )
   end
 
-  def normalize_error(%{message: message} = error, fallback_type, _fallback_message, extra_details)
-      when not is_nil(message) and is_map(extra_details) do
-    details =
-      error
-      |> Map.drop([:message, :retryable, :retryable?])
-      |> merge_error_details(extra_details)
-
-    error_envelope(fallback_type, normalize_message(message), details, normalize_retryable(error, fallback_type))
-  end
-
   def normalize_error(%module{} = reason, fallback_type, fallback_message, extra_details)
       when is_map(extra_details) do
     cond do
-      function_exported?(Jido.Error, :to_map, 1) and function_exported?(module, :message, 1) ->
+      action_error_module?(module) and function_exported?(Jido.Action.Error, :to_map, 1) ->
+        reason
+        |> Jido.Action.Error.to_map()
+        |> Map.drop([:stacktrace])
+        |> normalize_error(fallback_type, fallback_message, extra_details)
+
+      function_exported?(Jido.Error, :to_map, 1) ->
         reason
         |> Jido.Error.to_map()
         |> Map.drop([:stacktrace])
@@ -96,6 +92,16 @@ defmodule Jido.AI.Signal.Helpers do
           false
         )
     end
+  end
+
+  def normalize_error(%{message: message} = error, fallback_type, _fallback_message, extra_details)
+      when not is_nil(message) and is_map(extra_details) do
+    details =
+      error
+      |> Map.drop([:message, :retryable, :retryable?])
+      |> merge_error_details(extra_details)
+
+    error_envelope(fallback_type, normalize_message(message), details, normalize_retryable(error, fallback_type))
   end
 
   def normalize_error({type, message}, _fallback_type, _fallback_message, extra_details)
@@ -224,6 +230,13 @@ defmodule Jido.AI.Signal.Helpers do
 
   defp merge_error_details(details, extra_details) when is_map(details) and is_map(extra_details) do
     Map.merge(details, extra_details)
+  end
+
+  defp action_error_module?(module) do
+    module
+    |> Module.split()
+    |> Enum.take(3)
+    |> Kernel.==(["Jido", "Action", "Error"])
   end
 
   defp normalize_retryable(error, type) do

@@ -331,7 +331,7 @@ defmodule Jido.AI.Integration.ToolsPhase2Test do
       result = Turn.execute("calculator", %{}, %{}, tools: tools)
 
       assert {:error, error, []} = result
-      assert error.type == :execution_error
+      assert error.type == :validation_error
       assert String.contains?(error.message, "required")
     end
 
@@ -520,7 +520,17 @@ defmodule Jido.AI.Integration.ToolsPhase2Test do
       Turn.execute("nonexistent", %{}, %{}, tools: tools)
 
       assert_receive {:telemetry, [:jido, :ai, :tool, :execute, :stop], %{duration: _},
-                      %{tool_name: "nonexistent", result: {:error, %{type: :not_found}, []}}}
+                      %{
+                        tool_name: "nonexistent",
+                        termination_reason: :error,
+                        error_type: :not_found,
+                        result: %{
+                          status: :error,
+                          error_type: :not_found,
+                          effect_count: 0,
+                          preview: %{type: :not_found, details: %{tool_name: "nonexistent"}}
+                        }
+                      }}
 
       :telemetry.detach("integration-stop-error-handler")
     end

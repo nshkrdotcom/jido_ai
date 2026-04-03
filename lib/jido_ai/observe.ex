@@ -8,12 +8,11 @@ defmodule Jido.AI.Observe do
   - Required AI metadata/measurement normalization
   - Feature-gated event emission
   - Span lifecycle wrappers that honor AI observability config
-  - Sensitive value redaction helpers for telemetry payloads
+  - Sensitive value redaction and safe preview helpers for telemetry payloads
   """
 
+  alias Jido.AI.Log
   alias Jido.Observe, as: CoreObserve
-
-  require Logger
 
   @required_metadata_keys [
     :agent_id,
@@ -40,24 +39,24 @@ defmodule Jido.AI.Observe do
     :queue_ms
   ]
 
-  @sensitive_exact_keys MapSet.new([
-                          "api_key",
-                          "apikey",
-                          "password",
-                          "secret",
-                          "token",
-                          "auth_token",
-                          "authtoken",
-                          "private_key",
-                          "privatekey",
-                          "access_key",
-                          "accesskey",
-                          "bearer",
-                          "api_secret",
-                          "apisecret",
-                          "client_secret",
-                          "clientsecret"
-                        ])
+  @sensitive_exact_keys [
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "token",
+    "auth_token",
+    "authtoken",
+    "private_key",
+    "privatekey",
+    "access_key",
+    "accesskey",
+    "bearer",
+    "api_secret",
+    "apisecret",
+    "client_secret",
+    "clientsecret"
+  ]
 
   @sensitive_contains ["secret_"]
   @sensitive_suffixes ["_secret", "_key", "_token", "_password"]
@@ -68,6 +67,12 @@ defmodule Jido.AI.Observe do
   @type metadata :: map()
   @type span_ctx :: CoreObserve.span_ctx() | :noop
   @type feature_gate :: :llm_deltas
+  @type tool_result_summary :: %{
+          required(:status) => :ok | :error | :unknown,
+          optional(:effect_count) => non_neg_integer(),
+          optional(:error_type) => atom(),
+          optional(:preview) => term()
+        }
 
   @doc """
   Builds an LLM telemetry event path under `[:jido, :ai, :llm, ...]`.
@@ -207,6 +212,98 @@ defmodule Jido.AI.Observe do
   def sanitize_sensitive(payload) when is_list(payload), do: Enum.map(payload, &sanitize_sensitive/1)
   def sanitize_sensitive(payload), do: payload
 
+  @doc """
+  Shapes arbitrary values into a telemetry-safe preview.
+
+  This preserves simple map/list structure where practical, redacts sensitive keys,
+  truncates large strings, and falls back to bounded inspect output for tuples,
+  structs, and other opaque terms.
+  """
+  @spec telemetry_safe(term(), keyword()) :: term()
+  def telemetry_safe(payload, opts \\ [])
+
+  def telemetry_safe(%_{} = struct, opts), do: safe_inspect_preview(struct, opts)
+
+  def telemetry_safe(payload, opts) when is_map(payload) do
+    Map.new(payload, fn {key, value} ->
+      if sensitive_key?(key) do
+        {key, "[REDACTED]"}
+      else
+        {key, telemetry_safe(value, opts)}
+      end
+    end)
+  end
+
+  def telemetry_safe(payload, opts) when is_list(payload) do
+    payload
+    |> Enum.take(Keyword.get(opts, :list_limit, 20))
+    |> Enum.map(&telemetry_safe(&1, opts))
+  end
+
+  def telemetry_safe(payload, opts) when is_binary(payload) do
+    max_length = Keyword.get(opts, :max_length, 200)
+
+    if String.valid?(payload) do
+      truncate_binary(payload, max_length)
+    else
+      safe_inspect_preview(payload, opts)
+    end
+  end
+
+  def telemetry_safe(payload, _opts)
+      when is_atom(payload) or is_number(payload) or is_boolean(payload) or is_nil(payload),
+      do: payload
+
+  def telemetry_safe(payload, opts) when is_tuple(payload), do: safe_inspect_preview(payload, opts)
+  def telemetry_safe(payload, opts), do: safe_inspect_preview(payload, opts)
+
+  @doc """
+  Returns a small, telemetry-safe summary for tool execution results.
+  """
+  @spec tool_result_summary(term()) :: tool_result_summary()
+  def tool_result_summary(result)
+
+  def tool_result_summary({:ok, output, effects}) do
+    %{
+      status: :ok,
+      effect_count: effect_count(effects),
+      preview: telemetry_safe(output)
+    }
+  end
+
+  def tool_result_summary({:ok, output}) do
+    %{
+      status: :ok,
+      effect_count: 0,
+      preview: telemetry_safe(output)
+    }
+  end
+
+  def tool_result_summary({:error, reason, effects}) do
+    %{
+      status: :error,
+      effect_count: effect_count(effects),
+      preview: telemetry_safe(reason)
+    }
+    |> maybe_put(:error_type, infer_error_type(reason))
+  end
+
+  def tool_result_summary({:error, reason}) do
+    %{
+      status: :error,
+      effect_count: 0,
+      preview: telemetry_safe(reason)
+    }
+    |> maybe_put(:error_type, infer_error_type(reason))
+  end
+
+  def tool_result_summary(other) do
+    %{
+      status: :unknown,
+      preview: telemetry_safe(other)
+    }
+  end
+
   defp emit_enabled?(obs_cfg, opts) do
     Map.get(obs_cfg, :emit_telemetry?, true) and feature_gate_enabled?(obs_cfg, Keyword.get(opts, :feature_gate))
   end
@@ -230,7 +327,7 @@ defmodule Jido.AI.Observe do
   defp valid_event?([:jido, :ai, :tool, :execute, event]) when event in [:start, :stop, :exception], do: true
 
   defp valid_event?(event) do
-    Logger.warning("Jido.AI.Observe ignored invalid AI telemetry event: #{inspect(event)}")
+    Log.warning(fn -> "Jido.AI.Observe ignored invalid AI telemetry event: #{Log.safe_inspect(event)}" end)
     false
   end
 
@@ -256,10 +353,37 @@ defmodule Jido.AI.Observe do
   defp sensitive_key?(key) when is_binary(key) do
     key = String.downcase(key)
 
-    MapSet.member?(@sensitive_exact_keys, key) or
+    key in @sensitive_exact_keys or
       Enum.any?(@sensitive_contains, &String.contains?(key, &1)) or
       Enum.any?(@sensitive_suffixes, &String.ends_with?(key, &1))
   end
 
   defp sensitive_key?(_key), do: false
+
+  defp truncate_binary(binary, max_length) do
+    if String.length(binary) > max_length do
+      String.slice(binary, 0, max_length) <> "..."
+    else
+      binary
+    end
+  end
+
+  defp safe_inspect_preview(term, opts) do
+    Log.safe_inspect(term,
+      max_length: Keyword.get(opts, :max_length, 200),
+      limit: Keyword.get(opts, :limit, 10)
+    )
+  end
+
+  defp infer_error_type(%{type: type}) when is_atom(type), do: type
+  defp infer_error_type(%{code: type}) when is_atom(type), do: type
+  defp infer_error_type(reason) when is_atom(reason), do: reason
+  defp infer_error_type(_), do: nil
+
+  defp effect_count(effects) when is_list(effects), do: length(effects)
+  defp effect_count(nil), do: 0
+  defp effect_count(_effects), do: 1
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

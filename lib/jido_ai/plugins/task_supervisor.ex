@@ -39,7 +39,7 @@ defmodule Jido.AI.Plugins.TaskSupervisor do
     state_key: :__task_supervisor_skill__,
     actions: []
 
-  require Logger
+  alias Jido.AI.Log
 
   @doc """
   Initialize plugin state when mounted to an agent.
@@ -53,7 +53,7 @@ defmodule Jido.AI.Plugins.TaskSupervisor do
         {:ok, %{supervisor: supervisor_pid}}
 
       {:error, reason} ->
-        Logger.error("Failed to start Task.Supervisor", reason: reason)
+        Log.error(fn -> "Failed to start Task.Supervisor" end, reason: Log.safe_inspect(reason))
         {:error, {:task_supervisor_failed, reason}}
     end
   end

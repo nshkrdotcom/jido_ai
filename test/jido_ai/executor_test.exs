@@ -130,6 +130,23 @@ defmodule Jido.AI.TurnExecutionTest do
     end
   end
 
+  defmodule TestActions.SensitiveResult do
+    use Jido.Action,
+      name: "sensitive_result",
+      description: "Returns sensitive and oversized payloads for telemetry tests",
+      schema: []
+
+    @impl true
+    def run(_params, _context) do
+      {:ok,
+       %{
+         api_key: "secret-key-12345",
+         message: String.duplicate("x", 260),
+         nested: %{"session_token" => "nested-secret", "ok" => true}
+       }}
+    end
+  end
+
   setup do
     tools =
       Turn.build_tools_map([
@@ -140,7 +157,8 @@ defmodule Jido.AI.TurnExecutionTest do
         TestActions.Echo,
         TestActions.LargeResult,
         TestActions.BinaryResult,
-        TestActions.ExceptionAction2
+        TestActions.ExceptionAction2,
+        TestActions.SensitiveResult
       ])
 
     {:ok, tools: tools}
@@ -236,7 +254,7 @@ defmodule Jido.AI.TurnExecutionTest do
       result = Turn.execute("calculator", %{}, %{}, tools: tools)
 
       assert {:error, error, []} = result
-      assert error.type == :execution_error
+      assert error.type == :validation_error
       assert error.details.tool_name == "calculator"
       # Error message should mention missing required option
       assert String.contains?(error.message, "required")
@@ -557,6 +575,35 @@ defmodule Jido.AI.TurnExecutionTest do
       assert sanitized_params["credentials"]["username"] == "user"
 
       :telemetry.detach("test-nested-sanitize-handler")
+    end
+
+    test "summarizes stop telemetry with sanitized result preview", %{tools: tools} do
+      test_pid = self()
+      handler_id = "test-stop-sanitize-handler-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:jido, :ai, :tool, :execute, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:telemetry_result, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, _result, []} = Turn.execute("sensitive_result", %{}, %{}, tools: tools)
+
+      assert_receive {:telemetry_result, metadata}
+      assert metadata.tool_name == "sensitive_result"
+      assert metadata.termination_reason == :complete
+      assert metadata.error_type == nil
+      assert metadata.result.status == :ok
+      assert metadata.result.effect_count == 0
+      assert metadata.result.preview[:api_key] == "[REDACTED]"
+      assert metadata.result.preview[:nested]["session_token"] == "[REDACTED]"
+      assert String.length(metadata.result.preview[:message]) < 260
+      assert String.ends_with?(metadata.result.preview[:message], "...")
     end
   end
 

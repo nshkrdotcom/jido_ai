@@ -36,6 +36,17 @@ defmodule Jido.AI.Signal.HelpersTest do
                retryable?: true
              }
     end
+
+    test "normalizes Jido.Action execution failures via Jido.Error.to_map/1" do
+      input = Jido.Action.Error.execution_error("transient_error")
+
+      assert Helpers.normalize_error(input) == %{
+               type: :execution_error,
+               message: "transient_error",
+               details: %{},
+               retryable?: true
+             }
+    end
   end
 
   describe "correlation_id/1" do

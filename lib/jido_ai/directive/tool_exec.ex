@@ -101,6 +101,8 @@ defimpl Jido.AgentServer.DirectiveExec, for: Jido.AI.Directive.ToolExec do
   alias Jido.AI.Turn
   alias Jido.Tracing.Context, as: TraceContext
 
+  @type execute_monitor :: {pid(), reference(), reference()}
+
   def exec(directive, _input_signal, state) do
     %{
       id: call_id,
@@ -327,30 +329,61 @@ defimpl Jido.AgentServer.DirectiveExec, for: Jido.AI.Directive.ToolExec do
          timeout_ms
        ) do
     if is_integer(timeout_ms) and timeout_ms > 0 do
-      task =
-        Task.Supervisor.async_nolink(task_supervisor, fn ->
+      task_monitor =
+        start_execute_task(task_supervisor, fn ->
           execute_action(action_module, tool_name, arguments, context, tools)
         end)
 
-      try do
-        case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-          {:ok, result} ->
-            normalize_result(result, tool_name)
+      case await_execute_result(task_monitor, timeout_ms) do
+        {:ok, result} ->
+          normalize_result(result, tool_name)
 
-          {:exit, _reason} ->
-            {:error,
-             SignalHelpers.error_envelope(:timeout, "Tool execution timed out", %{timeout_ms: timeout_ms}, true), []}
-
-          nil ->
-            {:error,
-             SignalHelpers.error_envelope(:timeout, "Tool execution timed out", %{timeout_ms: timeout_ms}, true), []}
-        end
-      after
-        Process.demonitor(task.ref, [:flush])
+        :timeout ->
+          {:error, SignalHelpers.error_envelope(:timeout, "Tool execution timed out", %{timeout_ms: timeout_ms}, true),
+           []}
       end
     else
       execute_action(action_module, tool_name, arguments, context, tools)
       |> normalize_result(tool_name)
+    end
+  end
+
+  @spec start_execute_task(pid() | atom(), (-> term())) :: execute_monitor()
+  defp start_execute_task(task_supervisor, fun) do
+    caller = self()
+    result_ref = make_ref()
+
+    {:ok, pid} =
+      Task.Supervisor.start_child(task_supervisor, fn ->
+        send(caller, {result_ref, fun.()})
+      end)
+
+    {pid, Process.monitor(pid), result_ref}
+  end
+
+  @spec await_execute_result(execute_monitor(), timeout()) :: {:ok, term()} | :timeout
+  defp await_execute_result({pid, monitor_ref, result_ref}, timeout_ms) do
+    receive do
+      {^result_ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} ->
+        :timeout
+    after
+      timeout_ms ->
+        Process.exit(pid, :kill)
+        flush_execute_monitor(monitor_ref, pid)
+        :timeout
+    end
+  end
+
+  @spec flush_execute_monitor(reference(), pid()) :: :ok
+  defp flush_execute_monitor(monitor_ref, pid) do
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> :ok
+    after
+      0 -> :ok
     end
   end
 

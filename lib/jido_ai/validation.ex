@@ -9,6 +9,7 @@ defmodule Jido.AI.Validation do
   @type validation_result :: :ok | {:error, reason :: term()}
   @type prompt :: String.t()
   @type callback :: function()
+  @type callback_monitor :: {pid(), reference(), reference()}
 
   @max_prompt_length 5_000
   @max_input_length 100_000
@@ -295,22 +296,8 @@ defmodule Jido.AI.Validation do
   defp wrap_with_timeout(callback, timeout, task_supervisor) do
     fn arg ->
       case start_callback_task(task_supervisor, callback, arg) do
-        {:ok, task} ->
-          try do
-            case Task.yield(task, timeout) do
-              {:ok, task_result} ->
-                task_result
-
-              {:exit, _reason} ->
-                {:error, :callback_execution_failed}
-
-              nil ->
-                Task.shutdown(task, :brutal_kill)
-                {:error, :callback_timeout}
-            end
-          after
-            Process.demonitor(task.ref, [:flush])
-          end
+        {:ok, task_monitor} ->
+          await_callback_result(task_monitor, timeout)
 
         {:error, reason} ->
           {:error, reason}
@@ -318,12 +305,48 @@ defmodule Jido.AI.Validation do
     end
   end
 
+  @spec start_callback_task(pid() | atom(), callback(), term()) ::
+          {:ok, callback_monitor()} | {:error, atom()}
   defp start_callback_task(task_supervisor, callback, arg) do
+    caller = self()
+    result_ref = make_ref()
+
     try do
-      {:ok, Task.Supervisor.async_nolink(task_supervisor, fn -> callback.(arg) end)}
+      case Task.Supervisor.start_child(task_supervisor, fn ->
+             send(caller, {result_ref, callback.(arg)})
+           end) do
+        {:ok, pid} -> {:ok, {pid, Process.monitor(pid), result_ref}}
+        {:error, _reason} -> {:error, :callback_execution_failed}
+      end
     catch
       :exit, {:noproc, _} -> {:error, :missing_task_supervisor}
       :exit, _ -> {:error, :callback_execution_failed}
+    end
+  end
+
+  @spec await_callback_result(callback_monitor(), timeout()) :: term()
+  defp await_callback_result({pid, monitor_ref, result_ref}, timeout) do
+    receive do
+      {^result_ref, task_result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        task_result
+
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} ->
+        {:error, :callback_execution_failed}
+    after
+      timeout ->
+        Process.exit(pid, :kill)
+        flush_monitor(monitor_ref, pid)
+        {:error, :callback_timeout}
+    end
+  end
+
+  @spec flush_monitor(reference(), pid()) :: :ok
+  defp flush_monitor(monitor_ref, pid) do
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> :ok
+    after
+      0 -> :ok
     end
   end
 

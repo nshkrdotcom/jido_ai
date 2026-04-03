@@ -8,13 +8,12 @@ defmodule Jido.AI.Reasoning.ReAct.Runner do
 
   alias Jido.AI.PendingInputServer
   alias Jido.AI.Reasoning.ReAct.{Config, Event, PendingToolCall, State, Token, ToolSelection}
-  alias Jido.AI.Effects
   alias Jido.AI.Context, as: AIContext
+  alias Jido.AI.Effects
+  alias Jido.AI.Log
   alias Jido.AI.Signal.Helpers, as: SignalHelpers
   alias Jido.AI.Turn
   alias Jido.Agent.State, as: AgentState
-
-  require Logger
 
   @cleanup_wait_ms 25
   @stream_control_wait_ms 10
@@ -567,7 +566,7 @@ defmodule Jido.AI.Reasoning.ReAct.Runner do
           {acc, context_acc}
 
         {:error, reason}, {acc, context_acc} ->
-          Logger.error("tool task failure", reason: inspect(reason))
+          Log.error(fn -> "tool task failure" end, reason: Log.safe_inspect(reason))
           {acc, context_acc}
       end)
 

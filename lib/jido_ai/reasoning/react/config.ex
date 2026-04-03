@@ -3,9 +3,9 @@ defmodule Jido.AI.Reasoning.ReAct.Config do
   Canonical configuration for the Task-based ReAct runtime.
   """
 
+  alias Jido.AI.Log
   alias Jido.AI.Reasoning.ReAct.RequestTransformer
   alias Jido.AI.ToolAdapter
-  require Logger
 
   @default_model :fast
   @default_max_iterations 10
@@ -302,9 +302,9 @@ defmodule Jido.AI.Reasoning.ReAct.Config do
     unless :persistent_term.get(@ephemeral_secret_warned_key, false) do
       :persistent_term.put(@ephemeral_secret_warned_key, true)
 
-      Logger.warning(
+      Log.warning(fn ->
         "Jido.AI.Reasoning.ReAct using ephemeral token secret (no configured :react_token_secret); checkpoint tokens expire on VM restart"
-      )
+      end)
     end
   end
 
