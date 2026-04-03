@@ -302,9 +302,10 @@ defmodule Jido.AI.Reasoning.ReAct.Config do
     unless :persistent_term.get(@ephemeral_secret_warned_key, false) do
       :persistent_term.put(@ephemeral_secret_warned_key, true)
 
-      Logger.warning(
-        "Jido.AI.Reasoning.ReAct using ephemeral token secret (no configured :react_token_secret); checkpoint tokens expire on VM restart"
-      )
+      Logger.warning(fn ->
+        "Jido.AI.Reasoning.ReAct using ephemeral token secret " <>
+          "(no configured :react_token_secret); checkpoint tokens expire on VM restart"
+      end)
     end
   end
 

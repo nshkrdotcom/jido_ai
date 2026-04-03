@@ -53,7 +53,7 @@ defmodule Jido.AI.Plugins.TaskSupervisor do
         {:ok, %{supervisor: supervisor_pid}}
 
       {:error, reason} ->
-        Logger.error("Failed to start Task.Supervisor", reason: reason)
+        Logger.error(fn -> "Failed to start Task.Supervisor" end, reason: inspect(reason))
         {:error, {:task_supervisor_failed, reason}}
     end
   end

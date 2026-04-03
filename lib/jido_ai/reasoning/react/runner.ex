@@ -567,7 +567,7 @@ defmodule Jido.AI.Reasoning.ReAct.Runner do
           {acc, context_acc}
 
         {:error, reason}, {acc, context_acc} ->
-          Logger.error("tool task failure", reason: inspect(reason))
+          Logger.error(fn -> "tool task failure" end, reason: inspect(reason))
           {acc, context_acc}
       end)
 

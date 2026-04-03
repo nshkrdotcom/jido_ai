@@ -344,21 +344,20 @@ defmodule Jido.AI.Reasoning.GraphOfThoughts.Machine do
   """
   @spec get_ancestors(t(), String.t()) :: [String.t()]
   def get_ancestors(machine, node_id) do
-    get_ancestors_recursive(machine, node_id, MapSet.new())
-    |> MapSet.to_list()
+    machine
+    |> get_ancestors_recursive(node_id, %{})
+    |> Map.keys()
   end
 
-  @spec get_ancestors_recursive(t(), String.t(), MapSet.t(String.t())) :: MapSet.t(String.t())
   defp get_ancestors_recursive(machine, node_id, visited) do
     parents = get_parents(machine, node_id)
 
     Enum.reduce(parents, visited, fn parent_id, acc ->
-      if MapSet.member?(acc, parent_id) do
+      if Map.has_key?(acc, parent_id) do
         acc
       else
-        acc
-        |> MapSet.put(parent_id)
-        |> then(&get_ancestors_recursive(machine, parent_id, &1))
+        next_visited = Map.put(acc, parent_id, true)
+        get_ancestors_recursive(machine, parent_id, next_visited)
       end
     end)
   end
@@ -368,21 +367,20 @@ defmodule Jido.AI.Reasoning.GraphOfThoughts.Machine do
   """
   @spec get_descendants(t(), String.t()) :: [String.t()]
   def get_descendants(machine, node_id) do
-    get_descendants_recursive(machine, node_id, MapSet.new())
-    |> MapSet.to_list()
+    machine
+    |> get_descendants_recursive(node_id, %{})
+    |> Map.keys()
   end
 
-  @spec get_descendants_recursive(t(), String.t(), MapSet.t(String.t())) :: MapSet.t(String.t())
   defp get_descendants_recursive(machine, node_id, visited) do
     children = get_children(machine, node_id)
 
     Enum.reduce(children, visited, fn child_id, acc ->
-      if MapSet.member?(acc, child_id) do
+      if Map.has_key?(acc, child_id) do
         acc
       else
-        acc
-        |> MapSet.put(child_id)
-        |> then(&get_descendants_recursive(machine, child_id, &1))
+        next_visited = Map.put(acc, child_id, true)
+        get_descendants_recursive(machine, child_id, next_visited)
       end
     end)
   end

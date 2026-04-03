@@ -602,7 +602,7 @@ defmodule Jido.AI.Turn do
   end
 
   defp format_exception(tool_name, exception, stacktrace) do
-    Logger.error("Tool execution exception",
+    Logger.error(fn -> "Tool execution exception" end,
       tool_name: tool_name,
       exception_message: Exception.message(exception),
       exception_type: exception.__struct__,
@@ -620,12 +620,13 @@ defmodule Jido.AI.Turn do
   end
 
   defp format_catch(tool_name, kind, reason) do
-    message = "Caught #{kind}: #{inspect(reason)}"
+    reason_text = safe_inspect(reason)
+    message = "Caught #{kind}: #{reason_text}"
 
     SignalHelpers.error_envelope(
       :caught,
       message,
-      %{tool_name: tool_name, kind: kind, reason: inspect(reason)},
+      %{tool_name: tool_name, kind: kind, reason: reason_text},
       false
     )
   end
@@ -634,7 +635,7 @@ defmodule Jido.AI.Turn do
   defp timeout_from_details(_), do: nil
 
   defp finalize_execute_telemetry(tool_name, {:error, %{type: :timeout}, _effects}, start_time, context) do
-    exception_execute_telemetry(tool_name, :timeout, start_time, context)
+    timeout_execute_telemetry(tool_name, start_time, context)
   end
 
   defp finalize_execute_telemetry(tool_name, result, start_time, context) do
@@ -647,12 +648,15 @@ defmodule Jido.AI.Turn do
     metadata =
       %{
         tool_name: tool_name,
-        params: Observe.sanitize_sensitive(params),
+        params: Observe.telemetry_safe(params),
         call_id: context[:call_id],
+        tool_call_id: context[:call_id],
         request_id: context[:request_id] || context[:run_id],
         run_id: context[:run_id],
         agent_id: context[:agent_id],
-        iteration: context[:iteration]
+        iteration: context[:iteration],
+        origin: :turn,
+        operation: :tool_execute
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
@@ -668,17 +672,23 @@ defmodule Jido.AI.Turn do
   defp stop_execute_telemetry(tool_name, result, start_time, context) do
     obs_cfg = context[:observability] || %{}
     duration_native = System.monotonic_time() - start_time
+    result_summary = Observe.tool_result_summary(result)
 
     metadata =
       %{
         tool_name: tool_name,
-        result: result,
+        result: result_summary,
         call_id: context[:call_id],
+        tool_call_id: context[:call_id],
         request_id: context[:request_id] || context[:run_id],
         run_id: context[:run_id],
         agent_id: context[:agent_id],
         thread_id: context[:thread_id],
-        iteration: context[:iteration]
+        iteration: context[:iteration],
+        origin: :turn,
+        operation: :tool_execute,
+        termination_reason: tool_termination_reason(result_summary),
+        error_type: Map.get(result_summary, :error_type)
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
@@ -691,20 +701,25 @@ defmodule Jido.AI.Turn do
     )
   end
 
-  defp exception_execute_telemetry(tool_name, reason, start_time, context) do
+  defp timeout_execute_telemetry(tool_name, start_time, context) do
     obs_cfg = context[:observability] || %{}
     duration_native = System.monotonic_time() - start_time
 
     metadata =
       %{
         tool_name: tool_name,
-        reason: reason,
+        reason: Observe.telemetry_safe(:timeout),
         call_id: context[:call_id],
+        tool_call_id: context[:call_id],
         request_id: context[:request_id] || context[:run_id],
         run_id: context[:run_id],
         agent_id: context[:agent_id],
         thread_id: context[:thread_id],
-        iteration: context[:iteration]
+        iteration: context[:iteration],
+        origin: :turn,
+        operation: :tool_execute,
+        termination_reason: :error,
+        error_type: :timeout
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
@@ -805,6 +820,22 @@ defmodule Jido.AI.Turn do
     stacktrace
     |> Enum.take(5)
     |> Exception.format_stacktrace()
+  end
+
+  defp safe_inspect(term, opts \\ []) do
+    max_length = Keyword.get(opts, :max_length, 200)
+
+    term
+    |> inspect(limit: Keyword.get(opts, :limit, 10), pretty: false, printable_limit: max_length)
+    |> truncate_inspect(max_length)
+  end
+
+  defp truncate_inspect(text, max_length) when is_binary(text) do
+    if String.length(text) > max_length do
+      String.slice(text, 0, max_length) <> "..."
+    else
+      text
+    end
   end
 
   defp encode_tool_result_envelope(payload, parts \\ []) when is_map(payload) and is_list(parts) do
@@ -991,11 +1022,16 @@ defmodule Jido.AI.Turn do
     {filtered_result, stats} = Effects.filter_result(result, policy)
 
     if stats.dropped_count > 0 do
-      Logger.debug("Dropped disallowed tool effects count=#{stats.dropped_count} status=#{elem(filtered_result, 0)}")
+      Logger.debug(fn ->
+        "Dropped disallowed tool effects count=#{stats.dropped_count} status=#{elem(filtered_result, 0)}"
+      end)
     end
 
     filtered_result
   end
+
+  defp tool_termination_reason(%{status: :error}), do: :error
+  defp tool_termination_reason(_result_summary), do: :complete
 
   defp extract_tool_call_id(%{} = tool_call) do
     get_field(tool_call, :id, "")
