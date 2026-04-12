@@ -5,6 +5,7 @@ defmodule Jido.AI.TurnTest do
 
   alias Jido.AI.Turn
   alias ReqLLM.Message.ContentPart
+  alias ReqLLM.ToolResult
 
   @moduletag :unit
 
@@ -292,6 +293,60 @@ defmodule Jido.AI.TurnTest do
                  "output" => %{"value" => 1},
                  "content" => [%{"type" => "image_url", "url" => "https://example.com/chart.png"}]
                }
+             }
+    end
+
+    test "map-based file content parts with non-UTF-8 binary data are excluded from JSON payload" do
+      pdf_binary = <<0xE2, 0x28, 0xA1>>
+      file_part = ContentPart.file(pdf_binary, "test.pdf", "application/pdf")
+
+      assert [
+               %ContentPart{type: :text, text: encoded_payload},
+               %ContentPart{type: :file}
+             ] =
+               Turn.format_tool_result_content(
+                 {:ok,
+                  %{
+                    "__content_parts__" => [file_part],
+                    summary: "test result"
+                  }}
+               )
+
+      decoded = Jason.decode!(encoded_payload)
+      assert decoded["ok"] == true
+      assert decoded["result"] == %{"summary" => "test result"}
+    end
+
+    test "ToolResult file content parts with non-UTF-8 binary data are excluded from JSON payload" do
+      pdf_binary = <<0xE2, 0x28, 0xA1>>
+      file_part = ContentPart.file(pdf_binary, "test.pdf", "application/pdf")
+
+      assert [
+               %ContentPart{type: :text, text: encoded_payload},
+               %ContentPart{type: :file}
+             ] =
+               Turn.format_tool_result_content(
+                 {:ok, %ToolResult{output: %{summary: "test result"}, content: [file_part], metadata: %{}}}
+               )
+
+      assert Jason.decode!(encoded_payload) == %{
+               "ok" => true,
+               "result" => %{"summary" => "test result"}
+             }
+    end
+
+    test "bare file content-part lists with non-UTF-8 binary data omit JSON content payload" do
+      pdf_binary = <<0xE2, 0x28, 0xA1>>
+      file_part = ContentPart.file(pdf_binary, "test.pdf", "application/pdf")
+
+      assert [
+               %ContentPart{type: :text, text: encoded_payload},
+               %ContentPart{type: :file}
+             ] = Turn.format_tool_result_content({:ok, [file_part]})
+
+      assert Jason.decode!(encoded_payload) == %{
+               "ok" => true,
+               "result" => nil
              }
     end
   end
